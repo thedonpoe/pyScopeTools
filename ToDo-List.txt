@@ -2,3 +2,5 @@ Get Ch1 & Ch2 simultaneously (save current wave, get CH1, get Ch2 from saved wav
 implement/add get quick data (vs get accurate data) use 1 byte per data point (vs 2 bytes)
 
 all/more features (see manual)
+
+execute the library in a seperate thread (to make the program non-blocking)
