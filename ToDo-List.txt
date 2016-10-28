@@ -4,3 +4,5 @@ implement/add get quick data (vs get accurate data) use 1 byte per data point (v
 all/more features (see manual)
 
 execute the library in a seperate thread (to make the program non-blocking)
+
+learn to use github
