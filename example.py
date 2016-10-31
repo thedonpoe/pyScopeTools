@@ -1,10 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import scope
+import scope_GPIB as scope
 
-myscope=scope.Scope("COM1",debug=False)
+scope.list_devices() #only used to show all valid addresses
 
-x,data=myscope.readScope()
+#myscope=scope.Scope_GPIB(u'GPIB0::1::INSTR', debug=True)
+myscope=scope.Scope_GPIB("COM1", debug=False)
+
+x,data=myscope.readScope(fast_mode=False)
 
 plt.plot(x,data)
 plt.show()

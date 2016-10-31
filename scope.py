@@ -1,6 +1,16 @@
-import serial
+import visa
 import time
 import numpy as np
+import traceback
+
+
+def list_devices():
+    """
+    Helper function to list all valid addresses
+    """
+    rm = visa.ResourceManager()
+    print rm.list_resources()
+    
 
 class Scope:
     """Object modeling the oszilloscope
@@ -11,70 +21,78 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scope
 
-myscope=scope.Scope("COM1")
+#myscope=scope.Scope(u'GPIB0::1::INSTR', debug=True)
+myscope=scope.Scope("COM1", debug=False)
 
-x,data=myscope.readScope()
+x,data=myscope.readScope(fast_mode=False)
 
 plt.plot(x,data)
 plt.show()
 #####
     """
 
-    def __init__(self,port, baudrate=9600, debug=False):
+#using serial (COM) (@baudrate: 9600)
+#   normal mode: 5.3sec
+#   fast mode:   2.7sec
+#using GPIB
+#   normal mode: 0.55sec
+#   fast mode:   0.37sec
+
+    def __init__(self, address, baudrate=9600, timeout=6000, debug = False):
         """Create the scope object with given parameters
 
         Arguments:
-        port - the com port to be used, eg "COM1"
+        address - the com port to be used, eg "COM1"
+                  or a GPIB address like "u'GPIB0::1::INSTR'"
+                  the address is obtained by using scope.list_devices()
 
         Keyword arguments:
         baudrate - serial baudrate that is used (default: 9600)
+        timeout - set the timeout. NOTICE: a serial connection needs a long timeout, so the default value is 6sec!
         debug - switch the command line output
         """
-
-        # store variables in object
-        self.port=port
-        self.debug=debug
-
-        #create serial connection
-        self.com = serial.Serial(port=port, baudrate=baudrate)
-
-
-    def readScope(self, channel="CH1"):
+        self.debug = True
+        rm = visa.ResourceManager()
+        try:
+            self.inst = rm.open_resource(address, read_termination='\r\n')
+        except:
+            print "Cannot open connection."
+        if timeout:
+            self.inst.timeout = timeout
+        if "COM" in address:
+            self.inst.baud_rate=baudrate    
+        self.debug = debug
+        
+    def readScope(self, channel="CH1", fast_mode=False):
         """Read the data from scope without changing settings
 
         Keyword arguments:
         channel - channel to be read (default: "CH1")
+        fast_mode - use 1byte vs use 2bytes per data point (0.37sec vs 0.55sec)
         """
-
-        # check for open connection
-        if not self.com.isOpen():
-            self.com.open()
-
         # catch possible exceptions
         try:
             # select channel
-            self.com.write("DAT:SOU "+channel+'\r\n')
+            self.inst.write("DAT:SOU "+channel)
             # set encoding
-            self.com.write("DAT:ENC RIB"+'\r\n')
-            # set the byte with (2: 0 to 65,535 )
-            self.com.write("DAT:WID 2"+'\r\n')
+            self.inst.write("DAT:ENC RIB")
+            # set the byte width (2: 0 to 65,535 )
+            if fast_mode:
+                #in fast mode use only 1 byte per data point
+                self.inst.write("DAT:WID 1")
+            else:
+                #in normal mode use 2 bytes per data point (more accurate)
+                self.inst.write("DAT:WID 2")
             # set the starting point for aquisition
             ## should this be 0?
-            self.com.write("DAT:STAR 1"+'\r\n')
+            self.inst.write("DAT:STAR 1")
             # set the end point
-            self.com.write("DAT:STOP 2500"+'\r\n')
+            self.inst.write("DAT:STOP 2500")
 
             # collect oszi settings for the waveform
             # with this the real axis can be obtained
-            self.com.write("WFMPRe?"+'\r\n')
-            #time.sleep(1)
-            out = ''
-            #read until the message is complete. "\r\n" signalizes THE END
-            while self.com.inWaiting()>0 or not "\r\n" in out[-2:]:
-                # collect all returned data
-                out += self.com.read(self.com.inWaiting())
-                #time.sleep(0.5)
-                time.sleep(0.1) #sleep 100ms to wait for further bytes
+            out = self.inst.query("WFMPRe?")
+   
     
             ## debug raw scope parameters
             if self.debug: print out
@@ -91,17 +109,15 @@ plt.show()
                 if self.debug: print str(d[0])+"\t"+str(d[1])
     
             # get the data
-            self.com.write("CURV?"+'\r\n')
+            self.inst.write("CURV?")
     
             ## debug for time measurement
             if self.debug: t0 = time.time()
-    
-            # why do i need to read 13 bytes?
-            out = self.com.read(8)
-            out = self.com.read(5)
-    
+        
             # read the data to out
-            out = self.com.read(2500*2)
+            out = self.inst.read_raw()
+            out = out[13:] #drop the first 13 chars = ":CURVE #45000"
+            out = out[:-1] #drop '\r\n'
     
             ## debug reading time
             if self.debug: print "Reading took: "+str(time.time()-t0)+"sec"
@@ -110,7 +126,14 @@ plt.show()
             # >: big-endian
             # i: int
             # 2: two bytes
-            data = np.fromstring(out, dtype='>i2')
+            if fast_mode:
+                if len(out) > 2500:
+                    out = out[:2500]
+                data = np.fromstring(out, dtype='b')
+            else:
+                if len(out) > 5000:
+                    out = out[:5000] #drop another char  (only neccessary when using serial connection COM port)??
+                data = np.fromstring(out, dtype='>i2')
     
             # add offset to data
             data = np.add(data,np.ones(data.shape)*(-float(params['YOFF'])))
@@ -126,13 +149,14 @@ plt.show()
             if self.debug: print "x:"+str(len(x))+" y:"+str(len(data))
     
             # read the closing \r\n
-            self.com.read(2)
+            #self.com.read(2)
             
         except:
             # error in read
+            traceback.print_exc()
             try:
                 print "Error"
-                self.com.close()
+                #self.com.close()
                 return (0,0)
             except:
                 print "Error Closing"  
@@ -140,7 +164,7 @@ plt.show()
         
         
         # close serial connection
-        self.com.close()
+        #self.inst.close()
 
 
         # return x and data
